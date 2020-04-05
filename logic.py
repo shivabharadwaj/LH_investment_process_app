@@ -3,6 +3,7 @@ from dateutil.relativedelta import relativedelta
 import textwrap
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
+from statistics import mean
 
 # Set up Google API to access google doc
 def get_ticker_data(ticker):
@@ -24,6 +25,24 @@ def get_ticker_data(ticker):
 
     return ticker_data
 
+# get ticker data table
+def get_data_table():
+    scope = ['https://spreadsheets.google.com/feeds',
+             'https://www.googleapis.com/auth/drive']
+    creds = ServiceAccountCredentials.from_json_keyfile_name('creds.json', scope)
+    client = gspread.authorize(creds)
+
+    sheet = client.open('Investment Process App').sheet1
+
+    data = sheet.get_all_values()
+    headers = data.pop(0)
+    df_final = pd.DataFrame(data, columns=headers)
+    df_final['Date']= pd.to_datetime(df_final['Date'])
+
+    ticker_data = df_final
+
+    return ticker_data
+
 # Add line breaks to comments
 def add_new_line(comment):
     split_text = textwrap.wrap(comment, width=25)
@@ -42,23 +61,84 @@ def last_trading_day(date):
 
     return closing_day_latest
 
+############################################################################################
+# Create table with process metrics
 
-# Get coordinates for textbox annotations
-def get_y_position(counter, price_stock, max_price):
-    y_pos = 0
-    if ((price_stock <= (0.5 * max_price)) and counter % 2 == 0):
-        y_pos = price_stock
+# Take final_df and return time between each research step
+def get_lags_ticker(data_input, ticker):
+    data = data_input[data_input['Ticker'] == ticker]
 
-    elif ((price_stock <= (0.5 * max_price)) and counter % 2 != 0):
-        y_pos = price_stock * 1.1
+    try:
+        begin = data[data['Event'] == 'Begin Research']['Date'].values[0]
+    except IndexError:
+        begin = 0
 
-    elif ((price_stock > (0.5 * max_price)) and counter % 2 == 0):
-        y_pos = price_stock
+    try:
+        begin = data[data['Event'] == 'Begin Research']['Date'].values[0]
+        two_three = data[data['Event'] == 'Pass Level 2/3']['Date'].values[0]
+        lag1 = (two_three - begin).astype('timedelta64[D]').astype(int)
+    except IndexError:
+        lag1 = 0
 
-    else:
-        y_pos = price_stock * 0.9
+    try:
+        two_three = data[data['Event'] == 'Pass Level 2/3']['Date'].values[0]
+        four_five = data[data['Event'] == 'Pass Level 4/5']['Date'].values[0]
+        lag2 = (four_five - two_three).astype('timedelta64[D]').astype(int)
+    except IndexError:
+        lag2 = 0
 
-    return y_pos
+    try:
+        four_five = data[data['Event'] == 'Pass Level 4/5']['Date'].values[0]
+        six_seven = data[data['Event'] == 'Pass Level 6/7']['Date'].values[0]
+        lag3 = (six_seven - four_five).astype('timedelta64[D]').astype(int)
+    except IndexError:
+        lag3 = 0
 
-# Create dictionaries for drop down menu
+    return lag1, lag2, lag3, begin
 
+
+# take final_df and return average time between each research step
+def get_lags_average(data):
+    two_three_lags = []
+    four_five_lags = []
+    six_seven_lags = []
+
+    for company in data['Ticker'].unique():
+        lags = get_lags_ticker(data, company)
+        two_three_lags.append(lags[0])
+        four_five_lags.append(lags[1])
+        six_seven_lags.append(lags[2])
+
+    two_three_filtered = list(filter(lambda num: num != 0, two_three_lags))
+    four_five_filtered = list(filter(lambda num: num != 0, four_five_lags))
+    six_seven_filtered = list(filter(lambda num: num != 0, six_seven_lags))
+
+    if (len(two_three_filtered) != 0):
+        two_three_avg = mean(two_three_filtered)
+
+    if (len(four_five_filtered) != 0):
+        four_five_avg = mean(four_five_filtered)
+
+    if (len(six_seven_filtered) != 0):
+        six_seven_avg = mean(six_seven_filtered)
+
+    return two_three_avg, four_five_avg, six_seven_avg
+
+
+# take ticker_data and fill out final_table
+def create_table(data_full, ticker):
+    process_data = [['Pass Level 2/3', 0, 0], ['Pass Level 4/5', 0, 0], ['Pass Level 6/7', 0, 0]]
+    process_data = pd.DataFrame(process_data, columns=['', 'Average', ticker])
+    process_data = process_data.set_index([''])
+
+    process_data.iloc[0][0] = get_lags_average(data_full)[0]
+    process_data.iloc[1][0] = get_lags_average(data_full)[1]
+    process_data.iloc[2][0] = get_lags_average(data_full)[2]
+
+    process_data.iloc[0][1] = get_lags_ticker(data_full, ticker)[0]
+    process_data.iloc[1][1] = get_lags_ticker(data_full, ticker)[1]
+    process_data.iloc[2][1] = get_lags_ticker(data_full, ticker)[2]
+
+    return process_data
+
+############################################################################################
